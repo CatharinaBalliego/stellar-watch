@@ -40,6 +40,13 @@ export function lakeKey(sequence: number): string {
   return `v1.1/stellar/ledgers/pubnet/${partitionOf(sequence)}/${inverted(sequence)}--${sequence}.xdr.zst`;
 }
 
+async function basePrefix(network: LakeNetwork): Promise<string> {
+  if (network === "pubnet") return "v1.1/stellar/ledgers/pubnet/";
+  const [epoch] = await testnetEpochs();
+  if (!epoch) throw new Error("Nenhuma época de testnet encontrada no lake.");
+  return `v1.1/stellar/ledgers/testnet/${epoch}/`;
+}
+
 /**
  * A Testnet é resetada periodicamente, e o lake registra isso: cada reset abre
  * uma pasta nova, nomeada pela data (`.../testnet/2025-12-17/...`). O mesmo
@@ -54,6 +61,25 @@ async function testnetEpochs(): Promise<string[]> {
     .map((m) => m[1]!)
     .sort()
     .reverse(); // a época mais recente primeiro
+}
+
+async function getLastLedger(network: LakeNetwork): Promise<number> {
+  const prefix = await basePrefix(network);
+  const url = `${BUCKET}/?list-type=2&delimiter=/&prefix=${prefix}&max-keys=2`;
+  const xml = await (await fetch(url)).text();
+  const partition = /<CommonPrefixes>\s*<Prefix>([^<]+)<\/Prefix>/.exec(xml)?.[1];
+
+  if(!partition) throw new Error(`Nenhuma partição encontrada em ${prefix}`);
+
+  const files = await (
+    await fetch(`${BUCKET}/?list-type=2&prefix=${encodeURIComponent(partition)}&max-keys=1`)
+  ).text();
+
+  const sequence = /--(\d+)\.xdr/.exec(files)?.[1];
+
+  if (!sequence) throw new Error(`Partição ${partition} veio vazia`);
+
+  return Number(sequence);
 }
 
 async function testnetKey(sequence: number): Promise<string> {
@@ -163,7 +189,7 @@ export async function findLedgerByDate(
   bounds: { lo?: number; hi?: number } = {},
 ): Promise<number> {
   let lo = bounds.lo ?? 2;
-  let hi = bounds.hi ?? 70_000_000;
+  let hi = bounds.hi ?? await getLastLedger(network);
 
   while (lo < hi) {
     const mid = Math.floor((lo + hi) / 2);
